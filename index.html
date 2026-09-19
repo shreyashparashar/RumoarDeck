@@ -45,20 +45,29 @@ img{max-width:100%;display:block}
   background:radial-gradient(45% 42% at 50% 40%,rgba(255,236,206,.16),rgba(255,236,206,0) 70%);}
 #vig{position:absolute;inset:0;pointer-events:none;z-index:40;
   background:radial-gradient(130% 110% at 50% 48%,rgba(0,0,0,0) 38%,rgba(0,0,0,.72) 100%);}
-#grain{position:absolute;inset:-60px;pointer-events:none;z-index:41;opacity:.055;mix-blend-mode:overlay}
+#grain{position:absolute;inset:0;pointer-events:none;z-index:41;opacity:.05}
 #spot{position:absolute;left:0;top:0;width:760px;height:760px;border-radius:50%;pointer-events:none;z-index:2;
   transform:translate(-9999px,-9999px);opacity:.5;will-change:transform;
   background:radial-gradient(50% 50% at 50% 50%,rgba(255,240,215,.10),rgba(255,240,215,0) 70%)}
 
 /* ============================== BOOK ============================== */
 #stage{position:absolute;inset:0;transform-style:preserve-3d}
-#book{position:absolute;left:50%;top:50%;width:1600px;height:900px;transform-style:preserve-3d;
+#book{position:absolute;left:50%;top:50%;width:1600px;height:900px;transform-style:preserve-3d;z-index:1;
   transform:translate(-50%,-50%) scale(var(--k)) rotate(var(--rot));
   transition:transform 1.15s cubic-bezier(.5,.02,.16,1),opacity .8s;will-change:transform}
 #book.hidden{opacity:0;pointer-events:none;
   transform:translate(-50%,-50%) scale(calc(var(--k)*.42)) rotate(calc(var(--rot) - 90deg))}
-#deskshadow{position:absolute;left:-3%;top:3%;width:106%;height:100%;z-index:-1;filter:blur(38px);
-  background:radial-gradient(52% 52% at 50% 55%,rgba(0,0,0,.92),rgba(0,0,0,0) 72%)}
+/* shadows live on their own flat plane so a page turn never repaints them */
+#shadowplane{position:absolute;left:50%;top:50%;width:1600px;height:900px;pointer-events:none;z-index:0;
+  will-change:transform;
+  transform:translate(-50%,-50%) scale(var(--k)) rotate(var(--rot));
+  transition:transform 1.15s cubic-bezier(.5,.02,.16,1),opacity .8s}
+#shadowplane.hidden{opacity:0;transform:translate(-50%,-50%) scale(calc(var(--k)*.42)) rotate(calc(var(--rot) - 90deg))}
+/* a thin contact shadow only — a fraction of the pixels to composite */
+#deskshadow{position:absolute;left:1%;top:100%;width:98%;height:78px;
+  background:radial-gradient(52% 100% at 50% 0%,rgba(0,0,0,.8) 0%,rgba(0,0,0,.34) 46%,rgba(0,0,0,0) 80%)}
+#stackshadow{position:absolute;left:0;top:0;width:34px;height:100%;
+  background:linear-gradient(90deg,rgba(0,0,0,.55),rgba(0,0,0,0))}
 
 /* binder spine */
 #spine{position:absolute;left:0;top:0;width:56px;height:900px;z-index:900;border-radius:5px 0 0 5px;
@@ -84,8 +93,7 @@ img{max-width:100%;display:block}
 .leaf.back-anim{transition:transform .82s cubic-bezier(.33,0,.15,1)}
 .leaf.moving{will-change:transform}
 .side{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;
-  overflow:hidden;background:var(--paper);border-radius:0 6px 6px 0;
-  box-shadow:0 22px 44px rgba(0,0,0,.5)}
+  overflow:hidden;background:var(--paper);border-radius:0 6px 6px 0}
 .side.rear{transform:rotateY(180deg);
   background:linear-gradient(255deg,#fbfaf8,#eeebe5);color:#b9b5ac}
 .rear-mark{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--disp);
@@ -479,6 +487,15 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radiu
   .tick span{display:none}
 }
 @media (max-width:820px){ #ovbox{grid-template-columns:1fr} }
+
+/* engine pulse: a tiny composited dot, not an SVG repaint */
+.orbwrap{position:absolute;left:50%;top:47.62%;width:53.85%;aspect-ratio:1;
+  transform:translate(-50%,-50%);pointer-events:none}
+.orb{position:absolute;inset:0;animation:orb 5.2s linear infinite;will-change:transform}
+.orb i{position:absolute;left:50%;top:0;width:12px;height:12px;margin:-6px 0 0 -6px;
+  border-radius:50%;background:#fff}
+@keyframes orb{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.orb{animation:none}}
 </style>
 </head>
 <body>
@@ -515,8 +532,11 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radiu
 
   <!-- ===================== BOOK ===================== -->
   <div id="stage">
-    <div id="book" class="hidden">
+    <div id="shadowplane" class="hidden">
       <div id="deskshadow"></div>
+      <div id="stackshadow"></div>
+    </div>
+    <div id="book" class="hidden">
       <div id="spine">
         <div id="spinetext"><span>RUMOAR&#174;</span><span>FILE 001</span><span>INVESTOR DOSSIER</span></div>
       </div>
@@ -1113,20 +1133,30 @@ function go(n,instant){
   if(n===cur)return;
   var fwd=n>cur;
   busy=true;
+  /* only ONE leaf ever animates — intermediates snap silently */
+  var hero=fwd?n-1:n;
+  var snap=[];
   for(var i=0;i<N;i++){
-    var lf=leaves[i];
-    var shouldTurn=i<n;
-    var isTurned=lf.classList.contains('turned');
-    if(shouldTurn!==isTurned){
+    var lf=leaves[i], shouldTurn=i<n, isTurned=lf.classList.contains('turned');
+    lf.style.transform='';
+    if(shouldTurn===isTurned)continue;
+    if(i===hero){
+      lf.style.transition='';
       lf.classList.add('turning');lf.classList.add('moving');
       lf.classList.toggle('back-anim',!shouldTurn);
       lf.classList.toggle('turned',shouldTurn);
       (function(l){setTimeout(function(){
         l.classList.remove('turning');l.classList.remove('back-anim');l.classList.remove('moving');
       },880)})(lf);
+    }else{
+      lf.style.transition='none';
+      lf.classList.toggle('turned',shouldTurn);
+      snap.push(lf);
     }
-    lf.style.transform='';
-    lf.style.transition='';
+  }
+  if(snap.length){
+    void snap[0].offsetWidth;
+    requestAnimationFrame(function(){snap.forEach(function(l){l.style.transition=''})});
   }
   cur=n;
   paint();
@@ -1210,6 +1240,7 @@ function launch(){
   setTimeout(function(){ $('#coverwrap').classList.add('gone'); },700);
   setTimeout(function(){
     $('#book').classList.remove('hidden');
+    $('#shadowplane').classList.remove('hidden');
     document.body.classList.add('on');
     paint();
   },340);
@@ -1730,16 +1761,11 @@ PAGE[15]=function(cv){
   var ct2=S('text',{x:cx,y:cy+22,'text-anchor':'middle','font-size':13,fill:'#5f5d58',
     'font-family':"'Inter',sans-serif"},s);
   ct2.textContent='runs continuously';
-  var pulse=S('circle',{cx:cx,cy:cy-R,r:6,fill:'#fff'},s);
-  if(!RM){var t0=performance.now();
-    (function loop(n){
-      requestAnimationFrame(loop);
-      if(document.hidden||!visible(cv))return;
-      var a=((n-t0)/5200)*Math.PI*2-Math.PI/2;
-      pulse.setAttribute('cx',cx+Math.cos(a)*R);
-      pulse.setAttribute('cy',cy+Math.sin(a)*R);
-    })(t0);
-  }
+  var host=s.parentNode;
+  host.style.position='relative';
+  var ow=document.createElement('div'); ow.className='orbwrap';
+  ow.innerHTML='<div class="orb"><i></i></div>';
+  host.appendChild(ow);
 };
 
 /* --- 18 TAM --- */
@@ -1819,7 +1845,7 @@ PAGE[18]=function(cv){
     requestAnimationFrame(frame);
     if(document.hidden||!visible(cv))return;
     if(!drag){
-      if(Math.abs(vel)>0.004){rot+=vel;vel*=0.982;dirty=true}
+      if(Math.abs(vel)>0.006){rot+=vel;vel*=0.935;dirty=true}
       else if(!dirty)return;
     }
     dirty=false;
